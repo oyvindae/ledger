@@ -27,7 +27,4 @@ class SettledTransactionEntry(
     @Column(name = "preceding_entry_id") val precedingEntryId: UUID?,
     @Enumerated @Column(name = "type") val type: TransactionEntryType,
     @Enumerated @Column(name = "ledger") val ledger: Ledger,
-) : TransactionEntry {
-
-    fun amountAbsolute() = amountSigned.abs()
-}
+) : TransactionEntry

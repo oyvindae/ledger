@@ -2,20 +2,25 @@ package com.oeyvind.ledger.service.model
 
 import com.oeyvind.ledger.model.entity.TransactionEntry
 import java.math.BigDecimal
+import java.util.*
+
+// Apparently a collection of ledger entries is referred to as a "gaggle"
 
 class LedgerGaggle<T : TransactionEntry>() {
     private val entries: MutableList<T> = mutableListOf<T>()
 
-    fun preceedingEntryUuid() = entries.lastOrNull()?.id
+    fun preceedingEntryUuid(): UUID? = entries.lastOrNull()?.id
 
     fun add(createDebit: (TransactionEntryParams) -> T, createCredit: (TransactionEntryParams) -> T) {
         // debit before credit is the accounting standard
         val debit = add(createDebit)
         val credit = add(createCredit)
 
-        require(debit.amountSigned < BigDecimal.ZERO) { "Debit amount not negative" }
-        require(credit.amountSigned > BigDecimal.ZERO) { "Credit amount not positive" }
-        require(credit.amountSigned == debit.amountSigned.negate()) { "Debit amount of ${debit.amountSigned} does not equal credit amount of $credit.amountSigned" }
+        require(debit.isDebit()) { "Debit amount not negative" }
+        require(credit.isCredit()) { "Credit amount not positive" }
+        require(credit.amountAbsolute() == debit.amountAbsolute()) {
+            "Debit amount of ${debit.amountAbsolute()} does not equal credit amount of ${credit.amountAbsolute()}"
+        }
     }
 
     fun add(create: (TransactionEntryParams) -> T) = run {
@@ -28,5 +33,12 @@ class LedgerGaggle<T : TransactionEntry>() {
         entry
     }
 
-    fun honk(): List<T> = entries.toList()
+    fun honk(): List<T> = run {
+        val totalDebit = entries.filter { it.isDebit() }.sumOf { it.amountAbsolute() }
+        val totalCredit = entries.filter { it.isCredit() }.sumOf { it.amountAbsolute() }
+        require(totalDebit == totalCredit) {
+            "Transaction is unbalanced. Debit: $totalDebit Credit: $totalCredit"
+        }
+        entries.toList()
+    }
 }

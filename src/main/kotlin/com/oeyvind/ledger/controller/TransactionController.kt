@@ -21,7 +21,10 @@ class TransactionController(private val ledgerService: LedgerService) {
     }
 
     @PutMapping("/{transaction-id}/reverse")
-    fun reverseTransaction(@PathVariable("transaction-id") transactionId: String, @RequestBody request: SimpleReversePendingTransactionRequest) = run {
+    fun reverseTransaction(
+        @PathVariable("transaction-id") transactionId: String,
+        @RequestBody request: SimpleReversePendingTransactionRequest
+    ) = run {
         ledgerService.reversePendingTransaction(transactionId, request)
     }
 }

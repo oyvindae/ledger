@@ -22,13 +22,11 @@ class PendingTransactionEntry(
     @Column(name = "created_at") val createdAt: Instant,
     @ManyToOne @JoinColumn(name = "account_id") val account: Account,
     @ManyToOne @JoinColumn(name = "transaction_id") val transaction: Transaction,
+    @ManyToOne @JoinColumn(name = "main_transaction_id") val mainTransaction: Transaction,
     @Column(name = "amount_signed") override val amountSigned: BigDecimal,
     @Column(name = "sequence") val sequence: Int,
     @Column(name = "preceding_entry_id") val precedingEntryId: UUID?,
     @Enumerated @Column(name = "type") val type: TransactionEntryType,
     @Enumerated @Column(name = "ledger") val ledger: Ledger,
     @OneToOne @JoinColumn(name = "reverses_entry_id") val reverses: PendingTransactionEntry? = null,
-) : TransactionEntry{
-
-    fun amountAbsolute() = amountSigned.abs()
-}
+) : TransactionEntry

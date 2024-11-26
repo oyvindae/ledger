@@ -18,13 +18,17 @@ import java.util.*
 
 @Service
 class LedgerService(
+    private val accountBalanceService: AccountBalanceService,
     private val accountRepository: AccountRepository,
     private val pendingTransactionEntryRepository: PendingTransactionEntryRepository,
     private val settledTransactionEntryRepository: SettledTransactionEntryRepository,
     private val transactionRepository: TransactionRepository
 ) {
-    // archived pending entries? Or opposite direction for now? need to create anyway
-    // delete pending entries for PoC, but point out they should be archived
+
+    @Transactional
+    fun listTransactions(account: Account): List<Transaction> = run {
+        settledTransactionEntryRepository.findTransactions(account)
+    }
 
     @Transactional
     fun settleTransaction(transactionId: String): Transaction = run {
@@ -43,10 +47,6 @@ class LedgerService(
         val pendingEntries = pendingTransactionEntryRepository.findByTransaction(pendingTransaction)
         require(pendingEntries.size % 2 == 0) { "Odd number of entries" }
 
-        val accounts = pendingEntries
-            .map { it.account }
-            .distinct()
-
         val settledGaggle = LedgerGaggle<SettledTransactionEntry>()
         val finalReversal = transactionRepository.save(
             Transaction(
@@ -55,13 +55,12 @@ class LedgerService(
                 settled = true,
                 externalTransactionId = UUID.randomUUID().toString(),
                 parentTransaction = pendingTransaction,
-                )
+            )
         )
         val pendingGaggle = LedgerGaggle<PendingTransactionEntry>()
 
         val (evenEntries, oddEntries) = pendingEntries.sortedBy { it.sequence }.partition { it.sequence % 2 == 0 }
         evenEntries.zip(oddEntries).forEach { (debitEntry, creditEntry) ->
-            // TODO: This didn't subtract pending amounts for some reason
             settledGaggle.add(
                 createDebit = { params ->
                     val reversedDebitAmount = entryReversalAmountMap.get(debitEntry.id) ?: BigDecimal.ZERO
@@ -97,7 +96,8 @@ class LedgerService(
 
         val settledEntries = settledGaggle.honk()
 
-        val (settledEvenEntries, settledOddEntries) = settledEntries.sortedBy { it.sequence }.partition { it.sequence % 2 == 0 }
+        val (settledEvenEntries, settledOddEntries) = settledEntries.sortedBy { it.sequence }
+            .partition { it.sequence % 2 == 0 }
         settledEvenEntries.zip(settledOddEntries).forEach { (debitEntry, creditEntry) ->
             // need to swap settled vs pending
             pendingGaggle.add(
@@ -106,6 +106,7 @@ class LedgerService(
                         createdAt = Instant.now(),
                         account = creditEntry.account,
                         transaction = finalReversal,
+                        mainTransaction = pendingTransaction,
                         amountSigned = -creditEntry.amountSigned,
                         sequence = params.sequence,
                         precedingEntryId = params.precedingEntryId,
@@ -118,6 +119,7 @@ class LedgerService(
                         createdAt = Instant.now(),
                         account = debitEntry.account,
                         transaction = finalReversal,
+                        mainTransaction = pendingTransaction,
                         amountSigned = -debitEntry.amountSigned,
                         sequence = params.sequence,
                         precedingEntryId = params.precedingEntryId,
@@ -128,20 +130,8 @@ class LedgerService(
             )
         }
 
-        accounts.forEach { account ->
-            val matchingEntries = settledEntries.filter { it.account.id == account.id }
-            val debit = matchingEntries.filter { it.amountSigned < BigDecimal.ZERO }.sumOf { it.amountAbsolute() }
-            val credit = matchingEntries.filter { it.amountSigned > BigDecimal.ZERO }.sumOf { it.amountAbsolute() }
-            account.settledDebit += debit
-            account.settledCredit += credit
-            account.pendingDebit -= debit
-            account.pendingCredit -= credit
-            account
-        }
-
         settledTransactionEntryRepository.saveAll(settledEntries)
         pendingTransactionEntryRepository.saveAll(pendingGaggle.honk())
-        accountRepository.saveAll(accounts)
 
         pendingTransaction.settled = true
         transactionRepository.save(pendingTransaction)
@@ -162,17 +152,14 @@ class LedgerService(
         require(pendingEntries.size == 2) {
             "Only support reversing simple transactions for now"
         }
-        val debitEntry = pendingEntries.find { it.amountSigned < BigDecimal.ZERO }!!
-        val creditEntry = pendingEntries.find { it.amountSigned > BigDecimal.ZERO }!!
-
-        val accounts = listOf(debitEntry, creditEntry)
-            .map { it.account }
+        val debitEntry = pendingEntries.find { it.isDebit() }!!
+        val creditEntry = pendingEntries.find { it.isCredit() }!!
 
         // find other reversals
         val reversalTransactions = transactionRepository.findByParentTransactionAndReversal(pendingTransaction, true)
         val reversalEntries = reversalTransactions.flatMap { pendingTransactionEntryRepository.findByTransaction(it) }
-        val reversedDebit = reversalEntries.filter { it.amountSigned < BigDecimal.ZERO }.sumOf { it.amountAbsolute() }
-        val reversedCredit = reversalEntries.filter { it.amountSigned > BigDecimal.ZERO }.sumOf { it.amountAbsolute() }
+        val reversedDebit = reversalEntries.filter { it.isDebit() }.sumOf { it.amountAbsolute() }
+        val reversedCredit = reversalEntries.filter { it.isCredit() }.sumOf { it.amountAbsolute() }
 
         require(debitEntry.amountAbsolute() >= request.amount + reversedDebit) {
             "TBD"
@@ -197,6 +184,7 @@ class LedgerService(
                     createdAt = Instant.now(),
                     account = creditEntry.account,
                     transaction = reversalTransaction,
+                    mainTransaction = pendingTransaction,
                     amountSigned = -request.amount,
                     sequence = params.sequence,
                     precedingEntryId = params.precedingEntryId,
@@ -210,6 +198,7 @@ class LedgerService(
                     createdAt = Instant.now(),
                     account = debitEntry.account,
                     transaction = reversalTransaction,
+                    mainTransaction = pendingTransaction,
                     amountSigned = request.amount,
                     sequence = params.sequence,
                     precedingEntryId = params.precedingEntryId,
@@ -222,17 +211,7 @@ class LedgerService(
 
         val entries = gaggle.honk()
 
-        accounts.forEach { account ->
-            val matchingEntries = entries.filter { it.account.id == account.id }
-            val debit = matchingEntries.filter { it.amountSigned < BigDecimal.ZERO }.sumOf { it.amountAbsolute() }
-            val credit = matchingEntries.filter { it.amountSigned > BigDecimal.ZERO }.sumOf { it.amountAbsolute() }
-            account.pendingCredit -= debit
-            account.pendingDebit -= credit
-            account
-        }
-
         pendingTransactionEntryRepository.saveAll(entries)
-        accountRepository.saveAll(accounts)
 
         reversalTransaction
     }
@@ -254,12 +233,14 @@ class LedgerService(
         )
     }
 
-    // TODO: Postgres triggers/functions to validate
     @Transactional
     fun createPendingTransaction(request: PendingTransactionRequest): Transaction = run {
 
         val current = transactionRepository.findByExternalTransactionId(request.transactionId)
-        if (current != null) return current // TODO: Check status?
+        if (current != null) {
+            require(!current.settled) { "Transaction already settled" }
+            return current
+        }
 
         val accounts = request
             .entries
@@ -275,6 +256,7 @@ class LedgerService(
                 externalTransactionId = request.transactionId,
             )
         )
+
         val gaggle = LedgerGaggle<PendingTransactionEntry>()
         request.entries.forEach { e ->
             gaggle.add(
@@ -284,6 +266,7 @@ class LedgerService(
                         createdAt = Instant.now(),
                         account = account,
                         transaction = transaction,
+                        mainTransaction = transaction,
                         amountSigned = -e.amount,
                         sequence = params.sequence,
                         precedingEntryId = params.precedingEntryId,
@@ -297,6 +280,7 @@ class LedgerService(
                         createdAt = Instant.now(),
                         account = account,
                         transaction = transaction,
+                        mainTransaction = transaction,
                         amountSigned = e.amount,
                         sequence = params.sequence,
                         precedingEntryId = params.precedingEntryId,
@@ -309,28 +293,30 @@ class LedgerService(
 
         val entries = gaggle.honk()
 
+        // Verify all accounts have sufficient funds
         accounts.forEach { account ->
             val matchingEntries = entries.filter { it.account.id == account.id }
-            val debit = matchingEntries.filter { it.amountSigned < BigDecimal.ZERO }.sumOf { it.amountAbsolute() }
-            val credit = matchingEntries.filter { it.amountSigned > BigDecimal.ZERO }.sumOf { it.amountAbsolute() }
+            val debit = matchingEntries.filter { it.isDebit() }.sumOf { it.amountAbsolute() }
+            val credit = matchingEntries.filter { it.isCredit() }.sumOf { it.amountAbsolute() }
             if (!hasAvailableBalance(account, debit, credit)) {
                 throw IllegalArgumentException("Insufficient funds")
             }
-            account.pendingCredit += credit
-            account.pendingDebit += debit
-            account
         }
 
         pendingTransactionEntryRepository.saveAll(entries)
-        accountRepository.saveAll(accounts)
 
         transaction
     }
 
     private fun hasAvailableBalance(account: Account, debit: BigDecimal, credit: BigDecimal) = run {
         when (account.ledger) {
-            Ledger.CUSTOMER -> account.availableBalance() + (credit - debit) >= BigDecimal.ZERO
-            Ledger.GATEWAY -> true
+            Ledger.CUSTOMER -> {
+                val balance = accountBalanceService.calculateAccountBalance(account)
+                balance.availableBalance + (credit - debit) >= BigDecimal.ZERO
+            }
+
+            Ledger.GATEWAY ->
+                true
         }
     }
 
