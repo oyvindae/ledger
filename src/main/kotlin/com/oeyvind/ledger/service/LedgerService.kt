@@ -59,6 +59,7 @@ class LedgerService(
         )
         val pendingGaggle = LedgerGaggle<PendingTransactionEntry>()
 
+        // The code kludge below iterates through pairs of debit/credit in ascending order
         val (evenEntries, oddEntries) = pendingEntries.sortedBy { it.sequence }.partition { it.sequence % 2 == 0 }
         evenEntries.zip(oddEntries).forEach { (debitEntry, creditEntry) ->
             settledGaggle.add(
@@ -96,6 +97,7 @@ class LedgerService(
 
         val settledEntries = settledGaggle.honk()
 
+        // Iterate through pairs of debit/credit and create reversal entries for remaining pending debit/credit
         val (settledEvenEntries, settledOddEntries) = settledEntries.sortedBy { it.sequence }
             .partition { it.sequence % 2 == 0 }
         settledEvenEntries.zip(settledOddEntries).forEach { (debitEntry, creditEntry) ->
@@ -148,24 +150,25 @@ class LedgerService(
         val pendingTransaction = transactionRepository.findByExternalTransactionId(pendingTransactionId)
         if (pendingTransaction == null) throw IllegalArgumentException("Transaction not found")
         if (pendingTransaction.settled) throw IllegalArgumentException("Transaction already settled")
+
         val pendingEntries = pendingTransactionEntryRepository.findByTransaction(pendingTransaction)
         require(pendingEntries.size == 2) {
-            "Only support reversing simple transactions for now"
+            "Only support reversing simple transactions with 2 participants for now"
         }
         val debitEntry = pendingEntries.find { it.isDebit() }!!
         val creditEntry = pendingEntries.find { it.isCredit() }!!
 
-        // find other reversals
+        // find other reversals and calculate reversed debit and reversed credit
         val reversalTransactions = transactionRepository.findByParentTransactionAndReversal(pendingTransaction, true)
         val reversalEntries = reversalTransactions.flatMap { pendingTransactionEntryRepository.findByTransaction(it) }
         val reversedDebit = reversalEntries.filter { it.isDebit() }.sumOf { it.amountAbsolute() }
         val reversedCredit = reversalEntries.filter { it.isCredit() }.sumOf { it.amountAbsolute() }
 
         require(debitEntry.amountAbsolute() >= request.amount + reversedDebit) {
-            "TBD"
+            "Amount greater than remaining debit amount"
         }
         require(creditEntry.amountAbsolute() >= request.amount + reversedCredit) {
-            "TBD"
+            "Amount greater than remaining credit amount"
         }
 
         val reversalTransaction = transactionRepository.save(
@@ -177,6 +180,7 @@ class LedgerService(
                 parentTransaction = pendingTransaction
             )
         )
+
         val gaggle = LedgerGaggle<PendingTransactionEntry>()
         gaggle.add(
             createDebit = { params ->
@@ -316,6 +320,7 @@ class LedgerService(
             }
 
             Ledger.GATEWAY ->
+                // In order to allow bootstrapping system we need to allow gateway to go negative
                 true
         }
     }

@@ -54,9 +54,11 @@ class AccountsController(
     }
 
     @GetMapping("/{account-code}/transactions")
-    fun listTransactions(@PathVariable("account-code") code: String): List<Transaction> = run {
+    fun listTransactions(@PathVariable("account-code") code: String): SearchResult = run {
         val account = getAccountOrFail(code)
-        ledgerService.listTransactions(account)
+        SearchResult(
+            ledgerService.listTransactions(account).map { TransactionResponse(it.externalTransactionId, it.settled) }
+        )
     }
 
     private fun getAccountOrFail(code: String): Account = run {

@@ -18,7 +18,7 @@ interface PendingTransactionEntryRepository : JpaRepository<PendingTransactionEn
             "               join pending_transaction_entries pe on pe.main_transaction_id = t.id and t.settled is false and\n" +
             "                                                      pe.account_id = :accountId \n" +
             "      group by t.id\n" +
-            "      having sum(pe.amount_signed) < 0)",
+            "      having sum(pe.amount_signed) < 0) d",
         nativeQuery = true
         )
     fun calculatePendingDebit(@Param("accountId") accountId: UUID): BigDecimal

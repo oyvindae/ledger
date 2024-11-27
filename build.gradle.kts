@@ -39,6 +39,14 @@ dependencies {
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
 	testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
+	testImplementation("org.testcontainers:testcontainers")
+	testImplementation("org.testcontainers:junit-jupiter")
+	testImplementation("org.springframework.boot:spring-boot-testcontainers")
+	testImplementation("org.testcontainers:postgresql")
+	testImplementation("org.springframework:spring-test")
+	testImplementation("org.junit.jupiter:junit-jupiter:5.11.0")
+	testImplementation("io.kotest:kotest-assertions-core:5.9.1")
 }
 
 kotlin {
